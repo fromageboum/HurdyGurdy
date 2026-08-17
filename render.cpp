@@ -42,6 +42,8 @@ void render(BelaContext *context, void *userData)
 		filterQVal = map(analogRead(context, i, filterQPin), 0, 1, 0.5, 10);
 		volumeVal = analogRead(context, i, volumePin); // deja entre 0 et 1
 
+		distanceSensorReadVolume(context, i);
+
 		calculate_coefficients(context->audioSampleRate, filterFrequencyVal, filterQVal);
 	}
 
@@ -109,7 +111,7 @@ void render(BelaContext *context, void *userData)
 
 		float droneSample = distanceSensorProcessSample(context, i); // une seule fois par echantillon (pas par canal)
 
-		for (int c = 0; c < context->audioOutChannels; c++) audioWrite(context, i, c, (out + droneSample) * volumeVal);
+		for (int c = 0; c < context->audioOutChannels; c++) audioWrite(context, i, c, out * volumeVal + droneSample);
 	}
 }
 
