@@ -4,6 +4,7 @@
 #include "Recording.h"
 #include "Cropping.h"
 #include "Trillsensors.h"
+#include "Distsensor.h"
 
 // Pin du potentiometre de volume (propre a render.cpp, pas de module dedie
 // pour un seul potard)
@@ -20,6 +21,10 @@ bool setup(BelaContext *context, void *userData)
 	calculate_coefficients(context->audioSampleRate, 1000, 0.707);
 
 	if (!trillSensorsSetup()) {
+		return false;
+	}
+
+	if (!distanceSensorSetup(context)) {
 		return false;
 	}
 
@@ -102,10 +107,13 @@ void render(BelaContext *context, void *userData)
 			}
 		}
 
-		for (int c = 0; c < context->audioOutChannels; c++) audioWrite(context, i, c, out * volumeVal);
+		float droneSample = distanceSensorProcessSample(context, i); // une seule fois par echantillon (pas par canal)
+
+		for (int c = 0; c < context->audioOutChannels; c++) audioWrite(context, i, c, (out + droneSample) * volumeVal);
 	}
 }
 
 void cleanup(BelaContext *context, void *userData)
 {
+	distanceSensorCleanup();
 }
