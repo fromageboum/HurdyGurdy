@@ -6,11 +6,21 @@
 #include "Trillsensors.h"
 #include "Distsensor.h"
 
-// Pin du potentiometre de volume (propre a render.cpp, pas de module dedie
-// pour un seul potard)
+
+// Volume pot
 const unsigned int volumePin = 2;
 
+//Tuning pot
+const unsigned int tuningPin = 5;
+const unsigned int minScale= 1;
+const unsigned int maxScale=5;
+
+// Speed pot
+const unsigned int speedPin = 4;
+const int minSpeed = -2;
+const unsigned int maxSpeed = 3;
 int printCount = 0;
+float readPosition;
 
 bool setup(BelaContext *context, void *userData)
 {
@@ -27,8 +37,11 @@ bool setup(BelaContext *context, void *userData)
 	if (!distanceSensorSetup(context)) {
 		return false;
 	}
+	
+	pinMode(context, 0, tuningPin, INPUT);
 
 	return true;
+	
 }
 
 void render(BelaContext *context, void *userData)
@@ -36,11 +49,18 @@ void render(BelaContext *context, void *userData)
 	float filterFrequencyVal;
 	float filterQVal;
 	float volumeVal = 1.0f;
+	float speedVal ;
+	int tuningValue;
 
+	//Analog readings
 	for (int i = 0; i < context->analogFrames; i++) {
 		filterFrequencyVal = map(analogRead(context, i, filterFrequencyPin), 0, 1, 100, 1000);
 		filterQVal = map(analogRead(context, i, filterQPin), 0, 1, 0.5, 10);
-		volumeVal = analogRead(context, i, volumePin); // deja entre 0 et 1
+		volumeVal = analogRead(context, i, volumePin);
+		speedVal = map(analogRead(context,i,speedPin),0,1,minSpeed,maxSpeed);
+		tuningValue = map(analogRead(context,i,tuningPin),0,1,(int)minScale,(int)maxScale); 
+		 
+		
 
 		distanceSensorReadVolume(context, i);
 
@@ -48,13 +68,13 @@ void render(BelaContext *context, void *userData)
 	}
 
 	printCount++;
-	if (printCount >= 4410) { // environ toutes les 100ms a 44100 Hz
+	if (printCount >= 4410) { // every 100ms at 4410 hz
 		rt_printf("Flex: touches=%d loc=%f | Ring: touches=%d loc=%f | Volume=%.2f\n",
 			gNumActiveTouchesFlex, gTouchLocationCycleFlex, gNumActiveTouches, gTouchLocationCycle, volumeVal);
 		printCount = 0;
 	}
 
-	// Bornes de previsualisation du crop, basees sur finalSample (une fois par bloc)
+	// Defining values for the cropped sample
 	int previewStart = (int)map(provisionnalBeginCrop, 0, 1, 0, finalSample.size());
 	int previewEnd = (int)map(provisionnalEndingCrop, 0, 1, 0, finalSample.size());
 	if (previewStart >= (int)finalSample.size()) previewStart = finalSample.size() - 1;
@@ -63,30 +83,39 @@ void render(BelaContext *context, void *userData)
 
 	for (int i = 0; i < context->audioFrames; i++) {
 
-		// Capture micro + bouton record (module recording)
+		// mic + record button
 		recordingProcessSample(context, i);
 
-		// Bouton crop (module cropping)
+		// crop button
 		croppingProcessSample(context, i);
 
-		// --- Lecture filtree, avec previsualisation dynamique du crop ---
+		//Pre-vizualisation of the to be cropped file
 		float in;
 
 		if (gNumActiveTouchesFlex > 0) {
-			// Mode previsualisation live : lecture dans finalSample, bornee par le crop provisoire
+
 			if (finalReadPointer < previewStart || finalReadPointer > previewEnd) {
 				finalReadPointer = previewStart;
+				
 			}
 			in = finalSample[finalReadPointer];
 
-			finalReadPointer++;
-			if (finalReadPointer > previewEnd) finalReadPointer = previewStart;
-		} else {
-			// Mode normal : lecture du dernier crop valide
-			in = finalSample[finalReadPointer];
+			readPosition+=speedVal;
+			
+			if (readPosition > previewEnd) {
+				readPosition = previewStart;
+			}
+			finalReadPointer = (int)readPosition;
 
-			finalReadPointer++;
-			if (finalReadPointer >= (int)finalSample.size()) finalReadPointer = 0;
+		} else {
+			// Reading of the last sample with no input on flex Trill
+			readPosition+=speedVal;
+			finalReadPointer = (int)readPosition;
+			if (readPosition >= (int)finalSample.size()) readPosition = 0;
+
+			in = finalSample[finalReadPointer];
+			
+			if(readPosition < 0) readPosition =0;
 		}
 
 		float out = gB0 * in + gB1 * previousInput + gB2 * previousInput2 - gA1 * previousOutput - gA2 * previousOutput2;
@@ -96,14 +125,14 @@ void render(BelaContext *context, void *userData)
 		previousOutput2 = previousOutput;
 		previousOutput = out;
 
-		// --- Scratch via le Ring, adapte au mode actif ---
+		//Using ring Trill for browsing and scratching through the sample
 		if (gNumActiveTouches > 0) {
 			if (gNumActiveTouchesFlex > 0) {
-				// Scratch a l'interieur de la zone de previsualisation
+				//Scratch in preview
 				finalReadPointer = previewStart + (int)map(gTouchLocationCycle, 0, 1, 0, previewEnd - previewStart + 1);
 				if (finalReadPointer > previewEnd) finalReadPointer = previewEnd;
 			} else {
-				// Scratch dans le sample deja valide
+				// Scratch in final sample
 				finalReadPointer = (int)map(gTouchLocationCycle, 0, 1, 0, finalSample.size());
 				if (finalReadPointer >= (int)finalSample.size()) finalReadPointer = finalSample.size() - 1;
 			}

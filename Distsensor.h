@@ -1,5 +1,6 @@
 #pragma once
 #include <Bela.h>
+#include <vector>
 
 // Initialise le capteur VL53L1X (bus I2C 1, adresse 0x29), l'oscillateur
 // associe, le bouton d'activation/desactivation, et les 4 boutons de
@@ -27,3 +28,4 @@ extern volatile int gLatestDistanceMM;
 
 // Etat actuel (active/desactive), utile pour du diagnostic/print ailleurs.
 extern bool gDistanceSensorEnabled;
+

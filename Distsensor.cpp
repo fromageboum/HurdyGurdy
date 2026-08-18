@@ -1,11 +1,4 @@
-/*
- * Capteur de distance VL53L1X -> pilote un oscillateur (drone) dont la
- * frequence suit la distance mesuree.
- *
- * Cablage : via le Trill Hub (pastilles de soudure libres), sur le meme
- * bus I2C-1 que le Trill Ring / Trill Flex (adresses differentes, pas de
- * conflit : Ring=0x38, Flex=0x48, VL53L1X=0x29).
- */
+//Reading and processing of distance sensor values for the 3rd string
 
 #include "Distsensor.h"
 #include "Config.h"
@@ -20,13 +13,29 @@
 #include <cmath>
 #include <libraries/Oscillator/Oscillator.h>
 
-// ------------------------------------------------------------------
-// Portage de la classe VL53L1X (Pololu). La logique de mesure vient de
-// la bibliotheque officielle ; seule la couche de transport I2C a ete
-// reecrite pour Linux (ioctl / read / write), Bela ne fournissant pas
-// l'equivalent de Wire.h d'Arduino. Ajout de setROISize()/setROICenter()
-// pour reduire le champ de vision (FOV).
-// ------------------------------------------------------------------
+// value indicating the scale chosen for the 3rd string
+unsigned int scaleChoice = 0;
+
+//Declarations for the scales to be used
+//Array storing frquency reference for C4, C#4, D4, D#4, E4, F4, F#4, G4, G#4, A4, A#4, B4
+// Some of the keys are artificially extended to 24 values to match the Hurdy Gurdy keyboard
+std::vector<float> CMajor = {261.63,277.18,293.66,311.13,329.63,349.23,369.99,392,415.30,440,466.16,493.88};
+
+std::vector<float> fiveEDO = {440,505.43,580.58,666.92,766.08,880.00}; 
+
+std::vector<float> eightEDO = {44.,479.82,523.25,570.61,622.25,678.57,739.99,806.96,880.00};
+
+// The following frequencies correspond to the following of 'bem', 'gulu','dada', 'pelog', 'lima', 'nem', 'barang' notes, cycling for the additional values
+std::vector<float> pelog = {262,282,303,362,384,409,451,524, 544, 564, 585,644, 660,702};
+
+std::vector<float> centaur = {264,277.20,297,308,330,352,369.60,396,410.667,440,462,495,528}; //not sure yet :v
+
+std::vector<float> keyValues = {40,50,60,70,80,90,100,110,120,130,140,150,160,170,180,190,200,210,220,230,240,250,260,270};//Storing the 24 mesurements returned by the keys in mm
+
+std::vector<float> tunedKeys;
+
+// Porting of the Arduino VL53L1X class for bela
+
 class VL53L1X {
 public:
 	enum DistanceMode { Unknown, Short, Medium, Long };
@@ -197,7 +206,7 @@ public:
 	{
 		if(width > 16) width = 16;
 		if(height > 16) height = 16;
-		writeReg(ROI_CONFIG__USER_ROI_REQUESTED_GLOBAL_XY_SIZE, (uint8_t)(((height - 1) << 4) | (width - 1)));
+		writeReg(ROI_CONFIG__USER_ROI_REQUESTED_GLOBAL_XY_SIZE, (uint8_t)(((height - 1) << 8) | (width - 1)));
 	}
 
 	// Centre du ROI. 199 = centre exact du reseau de SPADs.
@@ -333,8 +342,8 @@ private:
 		writeReg16(DSS_CONFIG__MANUAL_EFFECTIVE_SPADS_SELECT, 200 << 8);
 		writeReg(DSS_CONFIG__ROI_MODE_CONTROL, 2);
 
-		setDistanceMode(Short); // adapte a la plage courte (2-30cm) des marteaux
-		setMeasurementTimingBudget(20000); // minimum requis pour le mode Short
+		setDistanceMode(Short); // short range of 0-30 centimenters
+		setMeasurementTimingBudget(20000);//minimum measurment for the short mode
 
 		writeReg16(ALGO__PART_TO_PART_RANGE_OFFSET_MM, readReg16(MM_CONFIG__OUTER_OFFSET_MM) * 4);
 
@@ -525,18 +534,20 @@ static const float kSmoothingFactor = 0.2f;
 static Oscillator gOscillator;
 static float gFrequency = 300.0f;
 
+
 // Plage de distance (mm) -> plage de frequence (Hz)
 static const float kMinDistanceMM = 20.0f;
 static const float kMaxDistanceMM = 300.0f;
 static const float kMinFrequencyHz = 100.0f;
 static const float kMaxFrequencyHz = 400.0f;
 
-// Amplitude du drone, volontairement discrete pour ne pas dominer le son
-// de l'instrument (a ajuster selon le rendu voulu)
-static const float kDroneAmplitude = 0.15f;
+// Amplitude du drone, desormais controlee par un potentiometre dedie
+// (analog pin 3), independant du volume principal
+static const unsigned int droneVolumePin = 3;
+static float gDroneAmplitude = 0.15f; // valeur par defaut avant la premiere lecture du potard
 
-// Bouton d'activation/desactivation, sur pin digitale 6 (libre)
-static const unsigned int distanceEnablePin = 6;
+// Bouton d'activation/desactivation, sur pin digitale 8
+static const unsigned int distanceEnablePin = 8;
 bool gDistanceSensorEnabled = false; // desactive par defaut au demarrage
 
 // Debounce du bouton toggle (independant des autres boutons)
@@ -544,6 +555,24 @@ static bool enableCandidateState = true;
 static int enableCandidateCounter = 0;
 static bool enableStableState = true;
 static bool previousEnableStableState = true;
+
+// --- Boutons de selection de forme d'onde (un par forme) ---
+static const unsigned int sineButtonPin = 2;
+static const unsigned int triangleButtonPin = 3;
+static const unsigned int squareButtonPin = 4;
+static const unsigned int sawtoothButtonPin = 5;
+
+static bool waveButtonState[4];
+
+// Debounce independant pour chacun des 4 boutons de forme d'onde
+static bool waveCandidateState[4] = {true, true, true, true};
+static int waveCandidateCounter[4] = {0, 0, 0, 0};
+static bool waveStableState[4] = {true, true, true, true};
+static bool previousWaveStableState[4] = {true, true, true, true};
+
+// Types d'onde et leurs noms, dans le meme ordre que les boutons
+static Oscillator::Type waveType[] = { Oscillator::sine, Oscillator::triangle, Oscillator::square, Oscillator::sawtooth };
+static const char* waveNames[] = {"sine", "triangle", "square", "sawtooth"};
 
 static void readSensorLoop(void*)
 {
@@ -579,11 +608,21 @@ bool distanceSensorSetup(BelaContext *context)
 	gOscillator.setup(context->audioSampleRate, Oscillator::sine);
 
 	pinMode(context, 0, distanceEnablePin, INPUT);
+	pinMode(context, 0, sineButtonPin, INPUT);
+	pinMode(context, 0, triangleButtonPin, INPUT);
+	pinMode(context, 0, squareButtonPin, INPUT);
+	pinMode(context, 0, sawtoothButtonPin, INPUT);
+
 
 	gReadSensorTask = Bela_createAuxiliaryTask(readSensorLoop, 50, "read-vl53l1x");
 	Bela_scheduleAuxiliaryTask(gReadSensorTask);
 
 	return true;
+}
+
+void distanceSensorReadVolume(BelaContext *context, int analogFrameIndex)
+{
+	gDroneAmplitude = analogRead(context, analogFrameIndex, droneVolumePin); // deja entre 0 et 1
 }
 
 float distanceSensorProcessSample(BelaContext *context, int n)
@@ -609,6 +648,31 @@ float distanceSensorProcessSample(BelaContext *context, int n)
 		}
 	}
 
+	// --- Lecture + debounce des 4 boutons de forme d'onde ---
+	waveButtonState[0] = digitalRead(context, n, sineButtonPin);
+	waveButtonState[1] = digitalRead(context, n, triangleButtonPin);
+	waveButtonState[2] = digitalRead(context, n, squareButtonPin);
+	waveButtonState[3] = digitalRead(context, n, sawtoothButtonPin);
+
+	for (unsigned int i = 0; i < 4; i++) {
+		if (waveButtonState[i] == waveCandidateState[i]) {
+			waveCandidateCounter[i]++;
+		} else {
+			waveCandidateState[i] = waveButtonState[i];
+			waveCandidateCounter[i] = 0;
+		}
+
+		if (waveCandidateCounter[i] >= debounceSamples && waveCandidateState[i] != waveStableState[i]) {
+			previousWaveStableState[i] = waveStableState[i];
+			waveStableState[i] = waveCandidateState[i];
+
+			if (waveStableState[i] == false && previousWaveStableState[i] == true) {
+				gOscillator.setType(waveType[i]);
+				rt_printf("Type d'onde change : %s\n", waveNames[i]);
+			}
+		}
+	}
+
 	if (!gDistanceSensorEnabled) {
 		return 0.0f;
 	}
@@ -626,7 +690,51 @@ float distanceSensorProcessSample(BelaContext *context, int n)
 		gFrequency = map(clamped, kMinDistanceMM, kMaxDistanceMM, kMinFrequencyHz, kMaxFrequencyHz);
 	}
 
-	return kDroneAmplitude * gOscillator.process(gFrequency);
+	return gDroneAmplitude * gOscillator.process(gFrequency);
+}
+
+void tuningSynthString(){
+	
+	// Defining the chosen scale
+		switch(scaleChoice){
+		
+		case 1 : 
+		//The chosen scale is Cmajor
+		for(int n= 0; n<= CMajor.size(); n++){
+			tunedKeys[n]= CMajor[n];
+		}
+		
+		
+		case 2 :
+		//The chosen scale is fiveEDO
+		for(int n= 0; n<= fiveEDO.size(); n++){
+			tunedKeys[n]= fiveEDO[n];
+		}
+		//case 3 :
+		//The chosen scale is eightEDO
+		for(int n= 0; n<= eightEDO.size(); n++){
+			tunedKeys[n]= eightEDO[n];
+		}
+		
+		//case 4 :
+		//The chosed scale is Pelog
+		for(int n= 0; n<= pelog.size(); n++){
+			tunedKeys[n]= pelog[n];
+		}
+		
+		//case 5 :
+		//The chosed scale is Centaur
+		for(int n= 0; n<= centaur.size(); n++){
+			tunedKeys[n]= centaur[n];
+		}
+		}
+	
+	for (int i=0; i <= keyValues.size(); i++){
+		
+		if (gLatestDistanceMM == tunedKeys[i]){
+	}
+	}
+	
 }
 
 void distanceSensorCleanup()
