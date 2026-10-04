@@ -1,31 +1,30 @@
 #pragma once
 #include <Bela.h>
-#include <vector>
 
-// Initialise le capteur VL53L1X (bus I2C 1, adresse 0x29), l'oscillateur
-// associe, le bouton d'activation/desactivation, et les 4 boutons de
-// selection de forme d'onde. Retourne false si le capteur ne repond pas
-// (ex: cable non branche via le Trill Hub).
+// Initialises the VL53L1X (I2C bus 1, address 0x29), the oscillator, the
+// toggle button and the 4 waveform buttons. Returns false if the sensor
+// does not answer (e.g. cable not plugged through the Trill Hub).
 bool distanceSensorSetup(BelaContext *context);
 
-// A appeler une fois par bloc, dans la boucle sur analogFrames de render()
-// (comme pour les autres potentiometres) : lit le potard de volume dedie au
-// drone et met a jour son amplitude en interne.
+// Call once per analog frame, inside the analogFrames loop of render()
+// (like the other potentiometers): reads the drone volume pot.
 void distanceSensorReadVolume(BelaContext *context, int analogFrameIndex);
 
-// A appeler une fois par echantillon audio, dans render() : lit tous les
-// boutons du module (toggle + formes d'onde, avec anti-rebond), et renvoie
-// l'echantillon courant de l'oscillateur (drone) si la fonctionnalite est
-// activee, sinon 0.
+// Chooses the scale of the 3rd string.
+// 0 = no scale (continuous distance -> frequency mapping)
+// 1 = C major, 2 = five-EDO, 3 = eight-EDO, 4 = pelog, 5 = centaur
+// Does nothing if the scale did not change, so it is safe to call every block.
+void distanceSensorSetScale(int scale);
+
+// Call once per audio sample inside render(): reads the buttons (with
+// debounce) and returns the current oscillator sample (0 when disabled).
 float distanceSensorProcessSample(BelaContext *context, int n);
 
-// Ferme proprement la connexion I2C au capteur (a appeler dans cleanup())
+// Closes the I2C connection (call in cleanup())
 void distanceSensorCleanup();
 
-// Derniere distance mesuree (mm), utile pour du diagnostic/print ailleurs.
-// -1 tant qu'aucune mesure valide n'est arrivee.
+// Last measured distance (mm), -1 until a valid measurement arrives
 extern volatile int gLatestDistanceMM;
 
-// Etat actuel (active/desactive), utile pour du diagnostic/print ailleurs.
+// Current state (enabled / disabled)
 extern bool gDistanceSensorEnabled;
-
